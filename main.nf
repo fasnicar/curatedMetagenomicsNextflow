@@ -159,7 +159,8 @@ process install_metaphlan_db {
     """
 }
 
-process metaphlan_bugs_list {
+// process metaphlan_bugs_list {
+process metaphlan_bugs_viruses_unknown_lists {
     publishDir "${params.publish_dir}/${meta.sample}/metaphlan_bugs_list", pattern: "{*tsv.gz,.command*}"
 
     tag "${meta.sample}"
@@ -178,6 +179,10 @@ process metaphlan_bugs_list {
     path 'bowtie2.out.gz', emit: metaphlan_bt2
     path 'metaphlan_bugs_list.tsv', emit: metaphlan_bugs_list
     path 'metaphlan_bugs_list.tsv.gz', emit: metaphlan_bugs_list_gz
+    path 'metaphlan_viruses_list.tsv', emit: metaphlan_viruses_list
+    path 'metaphlan_viruses_list.tsv.gz', emit: metaphlan_viruses_list_gz
+    path 'metaphlan_unknown_list.tsv', emit: metaphlan_unknown_list
+    path 'metaphlan_unknown_list.tsv.gz', emit: metaphlan_unknown_list_gz
     path ".command*"
     path "versions.yml"
 
@@ -186,6 +191,10 @@ process metaphlan_bugs_list {
     touch bowtie2.out.gz
     touch metaphlan_bugs_list.tsv
     touch metaphlan_bugs_list.tsv.gz
+    touch metaphlan_viruses_list.tsv
+    touch metaphlan_viruses_list.tsv.gz
+    touch metaphlan_unknown_list.tsv
+    touch metaphlan_unknown_list.tsv.gz
     touch .command.run
     touch versions.yml
     """
@@ -200,10 +209,29 @@ process metaphlan_bugs_list {
         --samout sam.bz2 \
         --bowtie2out bowtie2.out \
         --nproc ${task.cpus} \
+
+ // ADDING THE PARAMS FOR THE VIRAL PROFILING //
+        --profile_vsc \
+        --vsc_breadth 0.75 \
+        --vsc_out metaphlan_viruses_list.tsv \
+///////////////////////////////////////////////
+
         -o metaphlan_bugs_list.tsv \
         ${fastq}
 
+      ////////////////////////////////////////////////////////////
+     // VERIFY THAT THE COMMAND LINE BELOW WORKS WITH NEXTFLOW //
+    ////////////////////////////////////////////////////////////
+    metaphlan bowtie2.out \
+        --input_type bowtie2out \
+        --index ${params.metaphlan_index} \
+        --bowtie2db metaphlan \
+        --nproc 1 \
+        --unclassified_estimation > metaphlan_unknown_list.tsv
+
     gzip -c metaphlan_bugs_list.tsv > metaphlan_bugs_list.tsv.gz
+    gzip -c metaphlan_viruses_list.tsv > metaphlan_viruses_list.tsv.gz
+    gzip -c metaphlan_unknown_list.tsv > metaphlan_unknown_list.tsv.gz
     gzip bowtie2.out
 
     cat <<-END_VERSIONS > versions.yml
@@ -262,6 +290,47 @@ process metaphlan_markers {
     versions:
         metaphlan: \$( echo \$(metaphlan --version 2>&1 ) | awk '{print \$3}')
         bowtie2: \$( echo \$(bowtie2 --version 2>&1 ) | awk '{print \$3}')
+    END_VERSIONS
+    """
+}
+
+process sample_to_markers {
+    publishDir "${params.publish_dir}/${meta.sample}/strainphlan_markers/"
+    
+    tag "${meta.sample}"
+
+    cpus 4
+    memory "8g"
+
+    input:
+    val meta
+    path metaphlan_sam
+    path metaphlan_db
+
+    output:
+    val meta, emit: meta
+    path "sample_to_markers", emit: sample_to_markers  // OUTPUT FOLDER
+    path ".command*"
+    path "versions.yml"
+
+    stub:
+    """
+    // touch marker_presence.tsv.gz  // CAN THIS BE "mkdir sample_to_markers" ?
+    touch .command.run
+    touch versions.yml
+    """
+
+    script:
+    """
+    sample2markers.py --input metaphlan_sam \
+        --input_format bz2 \
+        --database ${mdb_path}/${mdb_version}.pkl \  // THIS IS THE PICKLE FILE PRESENT INSIDE THE METAPHLAN DB FOLDER
+        --nprocs 4 \
+        --output_dir sample_to_markers
+
+    cat <<-END_VERSIONS > versions.yml
+    versions:
+        sample2markers.py: \$( echo \$(sample2markers.py --version 2>&1 ) | awk '{print \$3}')
     END_VERSIONS
     """
 }
@@ -563,10 +632,16 @@ workflow {
         kneaddata.out.meta,
         kneaddata.out.fastq,
         install_metaphlan_db.out.metaphlan_db.collect())
+
     metaphlan_markers(
         metaphlan_bugs_list.out.meta,
         metaphlan_bugs_list.out.metaphlan_bt2,
         install_metaphlan_db.out.metaphlan_db.collect())
+
+    sample_to_markers(
+        metaphlan_bugs_list.out.metaphlan_sam,
+        install_metaphlan_db.out.metaphlan_db.collect())
+
     // humann(
     //    kneaddata.out.meta,
     //    kneaddata.out.fastq,
